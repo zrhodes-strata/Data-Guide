@@ -26,6 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
+guide = "typer_cli:app"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

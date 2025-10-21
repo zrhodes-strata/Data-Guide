@@ -1,0 +1,24 @@
+Metadata-Version: 2.4
+Name: data_guide
+Version: 0.0.1
+Summary: Accelerated and Augmented EDA
+Author: Zach
+Requires-Python: >=3.11
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: matplotlib
+Requires-Dist: seaborn
+Requires-Dist: missingno
+Requires-Dist: phonenumbers
+Requires-Dist: statsmodels
+Requires-Dist: scikit-learn
+Requires-Dist: geopandas
+Requires-Dist: esda
+Requires-Dist: requests
+Requires-Dist: beautifulsoup4
+Requires-Dist: python-magic
+Requires-Dist: markdown
+Requires-Dist: pdfplumber
+Requires-Dist: typer
+Requires-Dist: pyyaml

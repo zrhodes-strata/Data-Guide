@@ -23,12 +23,6 @@ def load_config(path: Path) -> dict:
 @app.command()
 def profile(
     config: Path = typer.Argument(..., help="Path to YAML/JSON configuration."),
-    output_dir: Path = typer.Option(Path("output"), help="Directory for reports"),
-    format: str = typer.Option("markdown", help="Report format: markdown/html/csv"),
-    analyses: List[str] = typer.Option(
-        ["dataset", "columns"],
-        help="Analyses to run: dataset, columns, bivariate",
-    ),
 ) -> None:
     """Run profiling for datasets defined in the configuration."""
     cfg_path = config.resolve()
@@ -36,6 +30,10 @@ def profile(
 
     api_key = cfg.get("api_key")  # Currently unused
     datasets = cfg.get("datasets", {})
+    output_dir = Path(cfg.get("output_dir", "profiling_reports"))
+    format = cfg.get("format", "markdown")
+    analyses = cfg.get("analyses", ["dataset", "columns"])
+
 
     for name, ds in datasets.items():
         path = Path(ds["path"])
