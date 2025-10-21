@@ -25,10 +25,10 @@
 ---
 
 ### 🎯 Intent & Responsibility
-- Produce correlation heatmaps for numeric data
-- Calculate VIF, chi-squared and mutual information statistics
-- Generate pairwise scatter plots and parallel coordinates
-- Save bivariate analysis plots to a folder
+- Normalise column roles (numeric, categorical, temporal) using `TypeResolver`
+- Produce correlation matrices, VIF scores, and statistical tests per column pair
+- Auto-route visual generation for numeric–numeric, numeric–categorical, and categorical–categorical pairs
+- Persist plots and metrics for downstream reporting and dashboarding
 
 ---
 
@@ -36,14 +36,16 @@
 | Direction | Name | Type | Description |
 |-----------|------|------|-------------|
 | 📥 In | dataframe | `pd.DataFrame` | dataset to analyze |
-| 📤 Out | figures | `List[str]` | paths to generated PNG plots |
-| 📤 Out | metrics | `dict` | computed statistics per pair |
+| 📥 In | custom_types | `dict[str,str]` | optional semantic overrides reused from DataProfiler |
+| 📤 Out | results | `Dict[str,Any]` | correlation matrices, pairwise metrics, type metadata |
+| 📤 Out | plots | `Dict[str,str]` | relative paths to saved PNG visualisations |
 
 ---
 
 ### 🔗 Dependencies
 - pandas, numpy, seaborn, matplotlib
-- scipy, sklearn, statsmodels, geopandas
+- scipy (stats, KDE), scikit-learn, statsmodels
+- internal: `data_profiler.TypeResolver`
 
 ---
 
@@ -55,11 +57,12 @@
 
 ### 9 Pipeline Integration
 #### Coordination Mechanics
-- Typically invoked after basic profiling to analyze inter-feature relationships
+- Triggered from `DataProfiler.profile_bivariate` or pipeline stages after column profiling
+- `profile()` returns structured metrics and plot paths keyed by column pairs
 
 #### Integration Points
-- Upstream: cleaned dataset from DataTransform
-- Downstream: visualizations for reports
+- Upstream: cleaned dataset from DataTransform / DataProfiler outputs
+- Downstream: Markdown reports, analyst notebooks, interactive dashboards
 
 #### Risks
 - High memory usage when computing pairwise metrics on wide datasets

@@ -25,10 +25,11 @@
 ---
 
 ### 🎯 Intent & Responsibility
-- Profile overall dataset metadata
-- Analyze each column (string or numeric) for statistics and anomalies
-- Generate Markdown/HTML/CSV reports summarizing results
-- Store results in a `results` dictionary for programmatic use
+- Normalise column types via a resolver that merges pandas inference with config overrides
+- Profile dataset-level metadata, per-column statistics, and temporal behaviour
+- Generate Markdown reports with linked visualisations for each column category
+- Optionally orchestrate bivariate analysis through `data_pipeline.bivariate_profiler`
+- Store results (including column types, plots, and optional pair metrics) for programmatic use
 
 ---
 
@@ -37,16 +38,17 @@
 |-----------|------|------|-------------|
 | 📥 In | dataframe | `pd.DataFrame` | dataset to profile |
 | 📥 In | custom_types | `dict[str,str]` | optional column type hints |
-| 📤 Out | results | `Dict[str,Any]` | nested summary of dataset and columns |
-| 📤 Out | report | `str` | Markdown/HTML/CSV text when generated |
+| 📤 Out | results | `Dict[str,Any]` | metadata, column profiles, plot paths, optional bivariate metrics |
+| 📤 Out | column_types | `Dict[str,Dict[str,str]]` | semantic/logical typing per column |
+| 📤 Out | report | `str` | Markdown document saved to disk when generated |
 
 ---
 
 ### 🔗 Dependencies
-- pandas, numpy, seaborn, matplotlib
-- missingno
-- modules within repo: `profiler` for plotting utilities
-- optional: `BivariateProfiler` for pairwise analysis
+- pandas, numpy, seaborn, matplotlib, missingno
+- optional: phonenumbers (phone validation)
+- internal: `data_pipeline.bivariate_profiler.BivariateProfiler` (lazy import)
+- re-exports mirrored in `profiler.py` for legacy compatibility
 
 ---
 
@@ -58,12 +60,13 @@
 
 ### 9 Pipeline Integration
 #### Coordination Mechanics
-- Called by pipeline scripts to profile raw and transformed CSVs
-- Exposes `generate_report` for downstream consumption
+- Pipelines supply datasets plus optional `custom_types`
+- `profile_dataset` normalises types, runs column routing, and (optionally) triggers bivariate profiling
+- `generate_report` materialises Markdown referencing artefacts in `output_dir/plots`
 
 #### Integration Points
 - Upstream: `pipeline.py`, `main_pipeline.py`, `data_pipeline/pipeline.py`
-- Downstream: markdown reports and visual plots stored to disk
+- Downstream: Markdown reports, plot images, and optional bivariate result bundles consumed by reporting tooling
 
 #### Risks
 - Profiling large datasets may exhaust memory
