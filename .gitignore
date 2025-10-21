@@ -24,3 +24,4 @@ src/data_pipeline/llm/*
 
 !ast_deps.csv
 !requirements.txt
+/Codex_++/docs/codex_traces
