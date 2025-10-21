@@ -1,357 +1,385 @@
-import pandas as pd
-import numpy as np
-import seaborn as sns
+from __future__ import annotations
+
+import itertools
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 import matplotlib.pyplot as plt
-from scipy.stats import entropy, gaussian_kde, pearsonr, spearmanr, kendalltau, chi2_contingency, pointbiserialr, ks_2samp, f_oneway
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from scipy.stats import (
+    chi2_contingency,
+    f_oneway,
+    gaussian_kde,
+    kendalltau,
+    ks_2samp,
+    pearsonr,
+    pointbiserialr,
+    spearmanr,
+)
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import mutual_info_score
+from sklearn.preprocessing import LabelEncoder
 from statsmodels.graphics.mosaicplot import mosaic
 from statsmodels.stats.outliers_influence import variance_inflation_factor
-from sklearn.preprocessing import LabelEncoder
-from scipy.spatial.distance import euclidean
-from sklearn.linear_model import LogisticRegression
-from pandas.plotting import parallel_coordinates
-from itertools import combinations
-import geopandas as gpd
-from esda.moran import Moran
-from esda.geary import Geary
-from sklearn.feature_selection import mutual_info_classif
-import os
+
+from data_profiler import TypeResolver, slugify
+
 
 class BivariateProfiler:
-    def __init__(self, dataframe, output_dir="bivariate_analysis"):
-        self.df = dataframe
-        self.output_dir = output_dir
+    """Analyse pairwise relationships using type-aware routing."""
 
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+    def __init__(
+        self,
+        dataframe: pd.DataFrame,
+        custom_types: Optional[Dict[str, str]] = None,
+        output_dir: str = "bivariate_analysis",
+    ) -> None:
+        self.output_dir = Path(output_dir).resolve()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.plots_dir = self.output_dir / "plots"
+        self.plots_dir.mkdir(parents=True, exist_ok=True)
 
-    def save_plot(self, plt, filename):
-        plt.savefig(f"{self.output_dir}/{filename}.png")
-        plt.close()
-
-    def correlation_analysis(self, method="pearson", impute = "mean"):
-        """
-        Compute correlation matrix for numeric columns.
-        Supported methods: Pearson, Spearman, Kendall.
-        """
-        if impute == "mean":
-            self.df.fillna(self.df.mean(), inplace=True) 
-
-        corr_matrix = self.df.dropna().corr(method=method)
-            
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
-        plt.title(f"{method.capitalize()} Correlation Matrix")
-        self.save_plot(plt, f"correlation_matrix_{method}")
-
-        return corr_matrix
-
-    def scatter_plot(self, x, y):
-        """
-        Generate scatter plot with regression line for numeric pairs.
-        """
-        plt.figure(figsize=(8, 6))
-        sns.regplot(x=self.df[x], y=self.df[y], scatter_kws={'alpha':0.5}, line_kws={'color':'red'})
-        plt.title(f"Scatter Plot: {x} vs {y}")
-        plt.xlabel(x)
-        plt.ylabel(y)
-        self.save_plot(plt, f"scatter_{x}_vs_{y}")
-        
-
-    def chi_square_test(self, cat1, cat2):
-        """
-        Perform Chi-Square test for two categorical variables.
-        """
-        contingency_table = pd.crosstab(self.df[cat1], self.df[cat2])
-        chi2, p, _, _ = chi2_contingency(contingency_table)
-        return {"chi2": chi2, "p_value": p}
-
-    def mosaic_plot(self, cat1, cat2):
-        """
-        Generate a mosaic plot for categorical variable relationships.
-        """
-        plt.figure(figsize=(10, 6))
-        mosaic(self.df, [cat1, cat2])
-        plt.title(f"Mosaic Plot: {cat1} vs {cat2}")
-        self.save_plot(plt, f"mosaic_{cat1}_vs_{cat2}")
-
-    def box_plot(self, num, cat):
-        """
-        Generate a box plot for a numeric variable across categorical groups.
-        """
-        plt.figure(figsize=(8, 6))
-        sns.boxplot(x=self.df[cat], y=self.df[num])
-        plt.title(f"Box Plot: {num} by {cat}")
-        self.save_plot(plt, f"boxplot_{num}_by_{cat}")
-
-    def anova_test(self, num, cat):
-        """
-        Perform ANOVA (F-test) to test numeric variable differences across categorical groups.
-        """
-        groups = [self.df[self.df[cat] == level][num] for level in self.df[cat].unique()]
-        if any(len(group) < 2 for group in groups):
-            return {"error": "ANOVA requires at least two values per group"}
-        
-        f_stat, p_value = f_oneway(*groups)
-        return {"f_stat": f_stat, "p_value": p_value}
-
-    def compute_vif(self):
-        numeric_cols = self.df.select_dtypes(include=[np.number])
-        if numeric_cols.shape[1] < 2:
-            return "Insufficient numeric columns for VIF calculation"
-        
-        vif_data = pd.DataFrame()
-        vif_data["Variable"] = numeric_cols.columns
-        vif_data["VIF"] = [
-            variance_inflation_factor(numeric_cols.values, i) if np.linalg.cond(numeric_cols.values) < 1e10 else np.inf
-            for i in range(numeric_cols.shape[1])
+        self.type_resolver = TypeResolver(dataframe, custom_types)
+        self.column_types = self.type_resolver.resolved_types
+        self.df = self.type_resolver.transform(dataframe)
+        self.numeric_columns = [
+            column
+            for column, info in self.column_types.items()
+            if info.semantic == "numeric" or info.semantic == "datetime"
         ]
-        return vif_data
+        self.categorical_columns = [
+            column
+            for column, info in self.column_types.items()
+            if info.semantic in {"string", "boolean"} or info.logical in {"id", "phone_number"}
+        ]
+        self.results: Dict[str, Any] = {}
 
-    def cramers_v(self, cat1, cat2):
-        """
-        Compute Cramér's V for categorical variables.
-        """
-        confusion_matrix = pd.crosstab(self.df[cat1], self.df[cat2])
-        chi2 = chi2_contingency(confusion_matrix)[0]
-        n = confusion_matrix.sum().sum()
-        r, k = confusion_matrix.shape
-        return np.sqrt(chi2 / (n * min(r - 1, k - 1)))
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def profile(
+        self,
+        include_plots: bool = True,
+        correlations: tuple[str, ...] = ("pearson", "spearman", "kendall"),
+    ) -> Dict[str, Any]:
+        """Run automated bivariate analysis across column type combinations."""
 
-    def logistic_regression_effect(self, cat, num):
-        """
-        Fit a logistic regression model to test interaction effects.
-        """
-        le = LabelEncoder()
-        y = le.fit_transform(self.df[cat])
-        X = self.df[[num]].dropna()
-        y = y[:len(X)]  # Ensure matching lengths
-        model = LogisticRegression().fit(X, y)
-        return {"coef": model.coef_[0][0], "intercept": model.intercept_[0]}
+        results: Dict[str, Any] = {
+            "column_types": self.type_resolver.as_dict(),
+            "numeric_numeric": {},
+            "numeric_categorical": {},
+            "categorical_categorical": {},
+            "correlation_matrices": {},
+            "plots": {},
+        }
 
-    def automated_bivariate_analysis(self):
-        """
-        Loop through all numeric-numeric, categorical-categorical, and numeric-categorical pairs.
-        """
-        num_cols = self.df.select_dtypes(include=[np.number]).columns
-        cat_cols = self.df.select_dtypes(include=["object", "category"]).columns
+        # Correlation matrices and VIF for numeric columns
+        if len(self.numeric_columns) >= 2:
+            for method in correlations:
+                matrix, plot_path = self.correlation_analysis(method=method, include_plot=include_plots)
+                results["correlation_matrices"][method] = matrix.round(4).fillna(0).to_dict()
+                if include_plots and plot_path:
+                    results["plots"][f"correlation_{method}"] = plot_path
+            vif_table = self.compute_vif()
+            if vif_table is not None:
+                results["vif"] = vif_table.to_dict("records")
+            else:
+                results["vif"] = []
+        else:
+            results["vif"] = []
 
-        results = {}
-        
-        for num1, num2 in combinations(num_cols, 2):
-            results[f"{num1}_vs_{num2}"] = self.correlation_analysis()
-            self.scatter_plot(num1, num2)
-        
-        for cat1, cat2 in combinations(cat_cols, 2):
-            results[f"{cat1}_vs_{cat2}"] = self.cramers_v(cat1, cat2)
-            self.mosaic_plot(cat1, cat2)
-        
-        for num, cat in product(num_cols, cat_cols):
-            results[f"{num}_by_{cat}"] = self.anova_test(num, cat)
-            self.box_plot(num, cat)
-        
+        # Numeric vs numeric pairs
+        for x, y in itertools.combinations(self.numeric_columns, 2):
+            metrics = self._analyze_numeric_pair(x, y)
+            if include_plots:
+                scatter = self.scatter_plot(x, y)
+                hexbin = self.hexbin_plot(x, y) if len(self.df) > 500 else None
+                plots = {"scatter": scatter, "hexbin": hexbin}
+                metrics["plots"] = {k: v for k, v in plots.items() if v}
+            results["numeric_numeric"][f"{x}|{y}"] = metrics
+
+        # Categorical vs categorical pairs
+        for cat1, cat2 in itertools.combinations(self.categorical_columns, 2):
+            metrics = self._analyze_categorical_pair(cat1, cat2)
+            if include_plots:
+                mosaic_path = self.mosaic_plot(cat1, cat2)
+                if mosaic_path:
+                    metrics["plots"] = {"mosaic": mosaic_path}
+            results["categorical_categorical"][f"{cat1}|{cat2}"] = metrics
+
+        # Numeric vs categorical pairs
+        for num in self.numeric_columns:
+            for cat in self.categorical_columns:
+                metrics = self._analyze_numeric_categorical(num, cat)
+                if include_plots:
+                    box_path = self.box_plot(num, cat)
+                    density_path = self.stacked_density_plot(num, cat)
+                    metrics["plots"] = {
+                        key: value
+                        for key, value in {
+                            "box_plot": box_path,
+                            "stacked_density": density_path,
+                        }.items()
+                        if value
+                    }
+                results["numeric_categorical"][f"{num}|{cat}"] = metrics
+
+        self.results = results
         return results
 
-    def parallel_coordinates_plot(self, class_column):
-        """
-        Generate a Parallel Coordinates plot for numeric variables grouped by a categorical variable.
-        """
-        numeric_cols = self.df.select_dtypes(include=[np.number]).columns
-        if class_column not in self.df.columns or class_column in numeric_cols:
-            print(f"Invalid class column: {class_column}")
-            return
-        plt.figure(figsize=(12, 6))
-        parallel_coordinates(self.df[numeric_cols.to_list() + [class_column]], class_column, colormap=plt.get_cmap("tab10"))
-        plt.title("Parallel Coordinates Plot")
-        self.save_plot(plt, f"parallel_coordinates")
+    def automated_bivariate_analysis(
+        self,
+        include_plots: bool = True,
+        correlations: tuple[str, ...] = ("pearson", "spearman", "kendall"),
+    ) -> Dict[str, Any]:
+        """Backward-compatible alias for :meth:`profile`."""
 
-    def sankey_plot(self, cat1, cat2):
-        """
-        Generate a Sankey diagram for two categorical variables.
-        """
-        counts = self.df.groupby([cat1, cat2]).size().reset_index(name='count')
-        labels = list(pd.concat([counts[cat1], counts[cat2]]).unique())
-        source = counts[cat1].apply(lambda x: labels.index(x)).tolist()
-        target = counts[cat2].apply(lambda x: labels.index(x)).tolist()
-        
-        fig = go.Figure(go.Sankey(
-            node=dict(label=labels, pad=20, thickness=20),
-            link=dict(source=source, target=target, value=counts['count'])
-        ))
-        fig.update_layout(title_text=f"Sankey Diagram: {cat1} → {cat2}")
-        self.save_plot(plt, f"sankey_{cat1}_vs_{cat2}")
+        return self.profile(include_plots=include_plots, correlations=correlations)
 
-    def stacked_density_plot(self, numeric_col, category_col):
-        """
-        Generate a stacked density plot to see how a numeric variable varies by category.
-        """
-        categories = self.df[category_col].dropna().unique()
-        plt.figure(figsize=(10, 6))
-        for cat in categories:
-            subset = self.df[self.df[category_col] == cat][numeric_col].dropna()
-            density = gaussian_kde(subset)
-            x_vals = np.linspace(subset.min(), subset.max(), 100)
-            plt.plot(x_vals, density(x_vals), label=cat)
-        plt.title(f"Stacked Density Plot: {numeric_col} by {category_col}")
-        plt.xlabel(numeric_col)
-        plt.ylabel("Density")
-        plt.legend()
-        self.save_plot(plt, f"stacked_density_{numeric_col}_by_{category_col}")
+    # ------------------------------------------------------------------
+    # Pairwise metric helpers
+    # ------------------------------------------------------------------
+    def correlation_analysis(self, method: str = "pearson", include_plot: bool = True):
+        numeric_df = self._numeric_frame()
+        if numeric_df.shape[1] < 2:
+            return numeric_df.corr(method=method), None
+        corr_matrix = numeric_df.corr(method=method)
+        plot_path = None
+        if include_plot and not corr_matrix.empty:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
+            ax.set_title(f"{method.title()} Correlation Matrix")
+            plot_path = self._save_plot(fig, f"correlation_matrix_{method}.png")
+        return corr_matrix, plot_path
 
-    def hexbin_plot(self, x, y):
-        """
-        Generate a Hexbin plot for large datasets to visualize density.
-        """
-        plt.figure(figsize=(10, 6))
-        plt.hexbin(self.df[x], self.df[y], gridsize=50, cmap="Blues", mincnt=1)
-        plt.colorbar(label="Density")
-        plt.title(f"Hexbin Plot: {x} vs {y}")
-        plt.xlabel(x)
-        plt.ylabel(y)
-        self.save_plot(plt, f"hexbin_{x}_vs_{y}")
+    def scatter_plot(self, x: str, y: str) -> Optional[str]:
+        data = self._numeric_frame([x, y]).dropna()
+        if data.empty:
+            return None
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.regplot(x=data[x], y=data[y], scatter_kws={"alpha": 0.5}, line_kws={"color": "red"}, ax=ax)
+        ax.set_title(f"Scatter Plot: {x} vs {y}")
+        ax.set_xlabel(x)
+        ax.set_ylabel(y)
+        filename = f"scatter_{slugify(x)}_vs_{slugify(y)}.png"
+        return self._save_plot(fig, filename)
 
-    def pairplot(self):
-        """
-        Generate a Pairplot to visualize pairwise numeric relationships.
-        """
-        sns.pairplot(self.df)
-        self.save_plot(plt, f"pairplot")
+    def chi_square_test(self, cat1: str, cat2: str) -> Dict[str, float]:
+        contingency = pd.crosstab(self.df[cat1], self.df[cat2])
+        if contingency.empty:
+            return {"chi2": np.nan, "p_value": np.nan}
+        chi2, p, _, _ = chi2_contingency(contingency)
+        return {"chi2": float(chi2), "p_value": float(p)}
 
-    def point_biserial_corr(self, numeric_col, binary_col):
-        """Compute Point-Biserial Correlation between a numeric and binary categorical variable."""
-        return pointbiserialr(self.df[numeric_col], self.df[binary_col])[0]
-    
-    def tukey_hsd_test(self, numeric_col, category_col):
-        """Perform Tukey’s HSD Test to find significant differences between categories."""
-        groups = [group.dropna() for _, group in self.df.groupby(category_col)[numeric_col]]
-        return f_oneway(*groups)
-    
-    def mutual_information(self, categorical_col, target_col):
-        """Compute Mutual Information Score between categorical variables."""
-        return mutual_info_classif(self.df[[categorical_col]], self.df[target_col], discrete_features=True)[0]
-    
-    def kolmogorov_smirnov_test(self, numeric_col, group_col):
-        """Perform Kolmogorov-Smirnov test to compare distributions of two groups."""
-        groups = self.df.groupby(group_col)[numeric_col].apply(lambda x: x.dropna().values)
+    def mosaic_plot(self, cat1: str, cat2: str) -> Optional[str]:
+        contingency = pd.crosstab(self.df[cat1], self.df[cat2])
+        if contingency.empty:
+            return None
+        fig, ax = plt.subplots(figsize=(10, 6))
+        mosaic(self.df[[cat1, cat2]].dropna(), [cat1, cat2], ax=ax)
+        ax.set_title(f"Mosaic Plot: {cat1} vs {cat2}")
+        filename = f"mosaic_{slugify(cat1)}_vs_{slugify(cat2)}.png"
+        return self._save_plot(fig, filename)
+
+    def box_plot(self, num: str, cat: str) -> Optional[str]:
+        frame = self.df[[num, cat]].dropna()
+        if frame.empty or frame[cat].nunique() < 2:
+            return None
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.boxplot(x=frame[cat], y=frame[num], ax=ax)
+        ax.set_title(f"Box Plot: {num} by {cat}")
+        ax.set_xlabel(cat)
+        ax.set_ylabel(num)
+        filename = f"boxplot_{slugify(num)}_by_{slugify(cat)}.png"
+        return self._save_plot(fig, filename)
+
+    def anova_test(self, num: str, cat: str) -> Dict[str, float]:
+        frame = self.df[[num, cat]].dropna()
+        groups = [frame[frame[cat] == level][num] for level in frame[cat].unique()]
+        if len(groups) < 2 or any(len(group) < 2 for group in groups):
+            return {"f_stat": np.nan, "p_value": np.nan}
+        f_stat, p_value = f_oneway(*groups)
+        return {"f_stat": float(f_stat), "p_value": float(p_value)}
+
+    def compute_vif(self) -> Optional[pd.DataFrame]:
+        numeric_df = self._numeric_frame().dropna()
+        if numeric_df.shape[1] < 2:
+            return None
+        vif_values = []
+        try:
+            for i in range(numeric_df.shape[1]):
+                vif = variance_inflation_factor(numeric_df.values, i)
+                vif_values.append(vif)
+        except np.linalg.LinAlgError:
+            return None
+        return pd.DataFrame({"variable": numeric_df.columns, "vif": vif_values})
+
+    def cramers_v(self, cat1: str, cat2: str) -> float:
+        contingency = pd.crosstab(self.df[cat1], self.df[cat2])
+        if contingency.empty:
+            return float("nan")
+        chi2 = chi2_contingency(contingency)[0]
+        n = contingency.to_numpy().sum()
+        r, k = contingency.shape
+        return float(np.sqrt(chi2 / (n * (min(r - 1, k - 1) or 1))))
+
+    def logistic_regression_effect(self, cat: str, num: str) -> Optional[Dict[str, float]]:
+        frame = self.df[[cat, num]].dropna()
+        if frame.empty or frame[cat].nunique() < 2:
+            return None
+        encoder = LabelEncoder()
+        y = encoder.fit_transform(frame[cat])
+        X = frame[[num]]
+        try:
+            model = LogisticRegression(max_iter=200).fit(X, y)
+        except Exception:
+            return None
+        return {"coef": float(model.coef_[0][0]), "intercept": float(model.intercept_[0])}
+
+    def pairplot(self) -> Optional[str]:
+        if len(self.numeric_columns) < 2:
+            return None
+        numeric_df = self._numeric_frame()
+        if numeric_df.empty:
+            return None
+        grid = sns.pairplot(numeric_df.dropna())
+        filename = self.plots_dir / "pairplot.png"
+        grid.fig.savefig(filename)
+        plt.close(grid.fig)
+        return self._relative_path(filename)
+
+    def point_biserial_corr(self, numeric_col: str, categorical_col: str) -> Optional[float]:
+        frame = self.df[[numeric_col, categorical_col]].dropna()
+        if frame[categorical_col].nunique() != 2 or frame.empty:
+            return None
+        encoded = LabelEncoder().fit_transform(frame[categorical_col])
+        return float(pointbiserialr(frame[numeric_col], encoded)[0])
+
+    def tukey_hsd_test(self, numeric_col: str, category_col: str) -> Dict[str, Any]:
+        frame = self.df[[numeric_col, category_col]].dropna()
+        groups = [group for _, group in frame.groupby(category_col)[numeric_col]]
+        if len(groups) < 2:
+            return {"f_stat": np.nan, "p_value": np.nan}
+        f_stat, p_value = f_oneway(*groups)
+        return {"f_stat": float(f_stat), "p_value": float(p_value)}
+
+    def mutual_information(self, categorical_col: str, target_col: str) -> Optional[float]:
+        frame = self.df[[categorical_col, target_col]].dropna()
+        if frame.empty:
+            return None
+        return float(mutual_info_score(frame[categorical_col], frame[target_col]))
+
+    def kolmogorov_smirnov_test(self, numeric_col: str, group_col: str) -> Optional[Dict[str, float]]:
+        frame = self.df[[numeric_col, group_col]].dropna()
+        if frame[group_col].nunique() < 2:
+            return None
+        groups = [values[numeric_col].values for _, values in frame.groupby(group_col)]
         if len(groups) < 2:
             return None
-        return ks_2samp(*groups[:2])
-    
-    def geary_moran_tests(self, geo_df, value_col):
-        """Compute Geary’s C and Moran’s I for spatial autocorrelation."""
-        w = geo_df.geometry.apply(lambda x: x.centroid).to_crs(epsg=3857)
-        w_matrix = gpd.GeoDataFrame(geometry=w).distance_matrix()
-        moran_i = Moran(geo_df[value_col].values, w_matrix)
-        geary_c = Geary(geo_df[value_col].values, w_matrix)
-        return {"Moran's I": moran_i.I, "Geary's C": geary_c.C}
+        stat, p_value = ks_2samp(groups[0], groups[1])
+        return {"statistic": float(stat), "p_value": float(p_value)}
 
-    def bayesian_ab_test(self, category_col, metric_col, group_a, group_b):
-        """
-        Perform Bayesian A/B testing to compare two categorical groups.
-        """
-        data_a = self.df[self.df[category_col] == group_a][metric_col].dropna()
-        data_b = self.df[self.df[category_col] == group_b][metric_col].dropna()
-        
-        with pm.Model() as model:
-            mu_a = pm.Normal("mu_a", mu=np.mean(data_a), sigma=np.std(data_a))
-            mu_b = pm.Normal("mu_b", mu=np.mean(data_b), sigma=np.std(data_b))
-            diff = pm.Deterministic("difference", mu_b - mu_a)
-            trace = pm.sample(2000, return_inferencedata=True)
-        
-        pm.plot_posterior(trace, var_names=["difference"])
-        plt.title(f"Bayesian A/B Test: {group_a} vs {group_b}")
-        self.save_plot(plt, f"bayesian_ab_{group_a}_vs_{group_b}")
-    
-    def multidimensional_scaling(self, numeric_cols, n_components=2):
-        """
-        Perform Multidimensional Scaling (MDS) to visualize high-dimensional relationships.
-        """
-        mds = MDS(n_components=n_components, random_state=42)
-        scaled_data = mds.fit_transform(self.df[numeric_cols].dropna())
-        
-        plt.figure(figsize=(10, 6))
-        plt.scatter(scaled_data[:, 0], scaled_data[:, 1], alpha=0.7)
-        plt.title("Multidimensional Scaling (MDS)")
-        plt.xlabel("Dimension 1")
-        plt.ylabel("Dimension 2")
-        self.save_plot(plt, f"mds_visualization")
-    
-    def interaction_plot_analysis(self, category_col, numeric_col, group_col):
-        """
-        Generate an interaction plot to visualize relationships between variables.
-        """
-        plt.figure(figsize=(10, 6))
-        interaction_plot(self.df[category_col], self.df[group_col], self.df[numeric_col], markers=['D', '^'], ms=8)
-        plt.title(f"Interaction Plot: {numeric_col} by {category_col} and {group_col}")
-        self.save_plot(plt, f"interaction_plot_{numeric_col}")
+    def stacked_density_plot(self, numeric_col: str, category_col: str) -> Optional[str]:
+        frame = self.df[[numeric_col, category_col]].dropna()
+        categories = frame[category_col].unique()
+        if len(categories) < 2:
+            return None
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for category in categories:
+            subset = frame[frame[category_col] == category][numeric_col].dropna()
+            if subset.empty:
+                continue
+            if subset.nunique() < 2:
+                continue
+            density = gaussian_kde(subset)
+            x_vals = np.linspace(subset.min(), subset.max(), 100)
+            ax.plot(x_vals, density(x_vals), label=str(category))
+        if not ax.lines:
+            plt.close(fig)
+            return None
+        ax.set_title(f"Stacked Density Plot: {numeric_col} by {category_col}")
+        ax.set_xlabel(numeric_col)
+        ax.set_ylabel("Density")
+        ax.legend()
+        filename = f"stacked_density_{slugify(numeric_col)}_by_{slugify(category_col)}.png"
+        return self._save_plot(fig, filename)
 
-    def pca_analysis(self, num_components=2):
-        numeric_cols = self.df.select_dtypes(include=[np.number]).dropna()
-        pca = PCA(n_components=num_components)
-        components = pca.fit_transform(numeric_cols)
-        
-        plt.figure(figsize=(8,6))
-        plt.scatter(components[:, 0], components[:, 1], alpha=0.7)
-        plt.title("PCA Analysis")
-        plt.xlabel("Principal Component 1")
-        plt.ylabel("Principal Component 2")
-        self.save_plot(plt, "pca_analysis")
+    def hexbin_plot(self, x: str, y: str) -> Optional[str]:
+        data = self._numeric_frame([x, y]).dropna()
+        if data.empty:
+            return None
+        fig, ax = plt.subplots(figsize=(10, 6))
+        hb = ax.hexbin(data[x], data[y], gridsize=40, cmap="Blues", mincnt=1)
+        ax.figure.colorbar(hb, ax=ax, label="Density")
+        ax.set_title(f"Hexbin Plot: {x} vs {y}")
+        ax.set_xlabel(x)
+        ax.set_ylabel(y)
+        filename = f"hexbin_{slugify(x)}_vs_{slugify(y)}.png"
+        return self._save_plot(fig, filename)
 
-class AdvancedBivariateAnalysis:
-    def __init__(self, dataframe, output_dir="bivariate_analysis"):
-        self.df = dataframe
-        self.output_dir = output_dir
-    
-    def bayesian_ab_test(self, category_col, metric_col, group_a, group_b):
-        """
-        Perform Bayesian A/B testing to compare two categorical groups.
-        """
-        data_a = self.df[self.df[category_col] == group_a][metric_col].dropna()
-        data_b = self.df[self.df[category_col] == group_b][metric_col].dropna()
-        
-        with pm.Model() as model:
-            mu_a = pm.Normal("mu_a", mu=np.mean(data_a), sigma=np.std(data_a))
-            mu_b = pm.Normal("mu_b", mu=np.mean(data_b), sigma=np.std(data_b))
-            diff = pm.Deterministic("difference", mu_b - mu_a)
-            trace = pm.sample(2000, return_inferencedata=True)
-        
-        pm.plot_posterior(trace, var_names=["difference"])
-        plt.title(f"Bayesian A/B Test: {group_a} vs {group_b}")
-        plt.savefig(f"{self.output_dir}/bayesian_ab_{group_a}_vs_{group_b}.png")
-        plt.close()
-    
-    def multidimensional_scaling(self, numeric_cols, n_components=2):
-        """
-        Perform Multidimensional Scaling (MDS) to visualize high-dimensional relationships.
-        """
-        mds = MDS(n_components=n_components, random_state=42)
-        scaled_data = mds.fit_transform(self.df[numeric_cols].dropna())
-        
-        plt.figure(figsize=(10, 6))
-        plt.scatter(scaled_data[:, 0], scaled_data[:, 1], alpha=0.7)
-        plt.title("Multidimensional Scaling (MDS)")
-        plt.xlabel("Dimension 1")
-        plt.ylabel("Dimension 2")
-        plt.savefig(f"{self.output_dir}/mds_visualization.png")
-        plt.close()
-    
-    def interaction_plot_analysis(self, category_col, numeric_col, group_col):
-        """
-        Generate an interaction plot to visualize relationships between variables.
-        """
-        plt.figure(figsize=(10, 6))
-        interaction_plot(self.df[category_col], self.df[group_col], self.df[numeric_col], markers=['D', '^'], ms=8)
-        plt.title(f"Interaction Plot: {numeric_col} by {category_col} and {group_col}")
-        plt.savefig(f"{self.output_dir}/interaction_plot_{numeric_col}.png")
-        plt.close()
+    # ------------------------------------------------------------------
+    # Internal utilities
+    # ------------------------------------------------------------------
+    def _analyze_numeric_pair(self, x: str, y: str) -> Dict[str, Any]:
+        data = self._numeric_frame([x, y]).dropna()
+        if data.empty:
+            return {"n": 0}
+        return {
+            "n": int(len(data)),
+            "pearson": float(data[x].corr(data[y], method="pearson")),
+            "spearman": float(data[x].corr(data[y], method="spearman")),
+            "kendall": float(data[x].corr(data[y], method="kendall")),
+        }
 
-# Example Usage
-if __name__ == "__main__":
-    df = sns.load_dataset("titanic").dropna()
-    profiler = BivariateProfiler(df)
-    print(profiler.correlation_analysis("pearson"))
-    profiler.scatter_plot("age", "fare")
-    print(profiler.chi_square_test("sex", "class"))
-    profiler.mosaic_plot("sex", "class")
-    profiler.box_plot("fare", "class")
-    print(profiler.anova_test("fare", "class"))
-    print(profiler.compute_vif())
+    def _analyze_categorical_pair(self, cat1: str, cat2: str) -> Dict[str, Any]:
+        contingency = pd.crosstab(self.df[cat1], self.df[cat2])
+        if contingency.shape[0] < 2 or contingency.shape[1] < 2:
+            return {"error": "Insufficient variation"}
+        chi2, p_value, dof, _ = chi2_contingency(contingency)
+        return {
+            "chi2": float(chi2),
+            "p_value": float(p_value),
+            "degrees_of_freedom": int(dof),
+            "cramers_v": float(self.cramers_v(cat1, cat2)),
+            "mutual_information": float(mutual_info_score(self.df[cat1], self.df[cat2])),
+        }
+
+    def _analyze_numeric_categorical(self, num: str, cat: str) -> Dict[str, Any]:
+        frame = self.df[[num, cat]].dropna()
+        if frame.empty or frame[cat].nunique() < 2:
+            return {"error": "Insufficient variation"}
+        metrics: Dict[str, Any] = {
+            "anova": self.anova_test(num, cat),
+            "logistic_regression": self.logistic_regression_effect(cat, num),
+            "point_biserial": self.point_biserial_corr(num, cat),
+        }
+        return metrics
+
+    def _numeric_frame(self, columns: Optional[list[str]] = None) -> pd.DataFrame:
+        cols = columns or self.numeric_columns
+        data: Dict[str, pd.Series] = {}
+        for column in cols:
+            series = self.df[column]
+            if pd.api.types.is_datetime64_any_dtype(series):
+                values = series.view("int64").astype(float)
+                values[series.isna()] = np.nan
+                data[column] = values / 1e9
+            else:
+                data[column] = pd.to_numeric(series, errors="coerce")
+        return pd.DataFrame(data)
+
+    def _save_plot(self, fig: plt.Figure, filename: str) -> str:
+        path = self.plots_dir / filename
+        fig.tight_layout()
+        fig.savefig(path)
+        plt.close(fig)
+        return self._relative_path(path)
+
+    def _relative_path(self, path: Path) -> str:
+        return os.path.relpath(path, self.output_dir)
+
+
+__all__ = ["BivariateProfiler"]
