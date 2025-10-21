@@ -53,11 +53,12 @@ def profile(
         if "columns" in analyses:
             profiler.profile_columns()
 
-        report = profiler.generate_report(format, dataset=name)
-
         out_dir = (output_dir / name).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
         ext = "md" if format == "markdown" else format
+
+        report = profiler.generate_report(format, output_filename=f"{name}_report.{ext}")
+
         with open(out_dir / f"{name}_report.{ext}", "w") as f:
             f.write(report)
 

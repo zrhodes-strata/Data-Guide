@@ -772,9 +772,11 @@ class DataProfiler:
         toc_lines = ["# Table of Contents", ""] + [f"- {item}" for item in toc] + [""]
         report_content = "\n".join(toc_lines + report_lines)
 
+        """         
         output_path = self.output_dir / output_filename
         with open(output_path, "w", encoding="utf-8") as file:
             file.write(report_content)
+        """
         return report_content
 
     # ------------------------------------------------------------------

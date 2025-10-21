@@ -22,3 +22,4 @@ Requires-Dist: markdown
 Requires-Dist: pdfplumber
 Requires-Dist: typer
 Requires-Dist: pyyaml
+Requires-Dist: tabulate>=0.9.0
