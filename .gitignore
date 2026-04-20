@@ -30,6 +30,7 @@ config/
 
 # Reports output
 /reports/
+/plots/
 *.trace.*
 /debug_and_traces/*
 /Codex_++/docs/codex_traces
