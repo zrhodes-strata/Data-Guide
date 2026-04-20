@@ -116,7 +116,7 @@ def test_snowflake_connector_loads():
 
     with patch("connectors.snowflake_connector.snowflake") as mock_sf:
         mock_conn = MagicMock()
-        mock_sf.connector.connect.return_value = mock_conn
+        mock_sf.connect.return_value = mock_conn
         with patch("connectors.snowflake_connector.pd.read_sql", return_value=mock_df):
             connector = SnowflakeConnector(
                 credentials={

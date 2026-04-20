@@ -24,7 +24,7 @@ class SnowflakeConnector(BaseConnector):
         self._conn = None
 
     def connect(self) -> None:
-        self._conn = snowflake.connector.connect(
+        self._conn = snowflake.connect(
             account=self._credentials["account"],
             user=self._credentials["user"],
             password=self._credentials["password"],
@@ -34,7 +34,12 @@ class SnowflakeConnector(BaseConnector):
         )
 
     def load(self) -> GuideDataFrame:
-        df = pd.read_sql(self._query, self._conn)
+        try:
+            df = pd.read_sql(self._query, self._conn)
+        finally:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
         return GuideDataFrame(
             df=df,
             schema=self._schema,

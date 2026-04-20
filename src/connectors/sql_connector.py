@@ -18,7 +18,12 @@ class SQLConnector(BaseConnector):
         self._engine = create_engine(self._connection_string)
 
     def load(self) -> GuideDataFrame:
-        df = pd.read_sql(self._query, self._engine)
+        try:
+            df = pd.read_sql(self._query, self._engine)
+        finally:
+            if self._engine is not None:
+                self._engine.dispose()
+                self._engine = None
         return GuideDataFrame(
             df=df,
             schema=self._schema,
