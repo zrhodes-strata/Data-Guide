@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+from data_profiler import DataProfiler
+from core.models import GuideDataFrame, ProfilingResult
+
+
+def profile(gdf: GuideDataFrame, analyses: list[str] | None = None) -> ProfilingResult:
+    """Run univariate profiling on a GuideDataFrame, return a ProfilingResult."""
+    if analyses is None:
+        analyses = ["dataset", "columns"]
+
+    custom_types: dict[str, str] = {}
+    if (
+        gdf.schema.type_col
+        and gdf.schema.type_col in gdf.df.columns
+        and gdf.schema.metric_col in gdf.df.columns
+    ):
+        for _, row in gdf.df[[gdf.schema.metric_col, gdf.schema.type_col]].dropna().iterrows():
+            custom_types[str(row[gdf.schema.metric_col])] = str(row[gdf.schema.type_col])
+
+    profiler = DataProfiler(gdf.df, custom_types=custom_types)
+
+    if "dataset" in analyses:
+        profiler.profile_dataset()
+
+    if "columns" in analyses:
+        profiler.profile_columns()
+
+    dataset_stats = getattr(profiler, "dataset_summary", {}) or {}
+    column_stats = getattr(profiler, "column_summaries", {}) or {}
+
+    return ProfilingResult(
+        source=gdf,
+        dataset_stats=dataset_stats,
+        column_stats=column_stats,
+    )
