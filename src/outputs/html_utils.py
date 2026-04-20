@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html as _html
 import io
 
 import matplotlib.pyplot as plt
@@ -16,12 +17,13 @@ def fig_to_base64(fig: plt.Figure) -> str:
 
 
 def wrap_html(body: str, title: str = "Data Guide Report") -> str:
+    safe_title = _html.escape(title)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title}</title>
+  <title>{safe_title}</title>
   <style>
     body {{ font-family: sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #222; }}
     h1 {{ border-bottom: 2px solid #444; padding-bottom: .5rem; }}
