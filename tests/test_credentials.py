@@ -66,6 +66,9 @@ def test_missing_required_field_raises(tmp_path):
         load_credentials("snowflake", credentials_path=str(creds_file))
 
 
-def test_no_credentials_raises():
+def test_no_credentials_raises(monkeypatch):
+    monkeypatch.delenv("GUIDE_CREDENTIALS_FILE", raising=False)
+    for key in ["SF_ACCOUNT", "SF_USER", "SF_PASSWORD", "SF_WAREHOUSE", "SF_DATABASE", "SF_SCHEMA"]:
+        monkeypatch.delenv(key, raising=False)
     with pytest.raises(CredentialsValidationError, match="No credentials"):
         load_credentials("snowflake")

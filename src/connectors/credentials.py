@@ -62,7 +62,8 @@ def load_credentials(
     if connector_type == "snowflake":
         keys = ["SF_ACCOUNT", "SF_USER", "SF_PASSWORD", "SF_WAREHOUSE", "SF_DATABASE", "SF_SCHEMA"]
         env_vals = {k: os.environ.get(k) for k in keys}
-        if all(env_vals.values()):
+        present = {k for k, v in env_vals.items() if v}
+        if present == set(keys):
             return {
                 "type": "snowflake",
                 "account": env_vals["SF_ACCOUNT"],
@@ -72,6 +73,11 @@ def load_credentials(
                 "database": env_vals["SF_DATABASE"],
                 "schema": env_vals["SF_SCHEMA"],
             }
+        if present:
+            missing = sorted(set(keys) - present)
+            raise CredentialsValidationError(
+                f"Credentials missing required field: {missing} not set for connector 'snowflake'"
+            )
 
     raise CredentialsValidationError(
         f"No credentials found for connector '{connector_type}'. "
