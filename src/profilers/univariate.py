@@ -11,7 +11,8 @@ def profile(gdf: GuideDataFrame, analyses: list[str] | None = None) -> Profiling
 
     custom_types: dict[str, str] = {}
     if (
-        gdf.schema.type_col
+        gdf.schema.mode == "long"
+        and gdf.schema.type_col
         and gdf.schema.type_col in gdf.df.columns
         and gdf.schema.metric_col in gdf.df.columns
     ):
@@ -21,13 +22,21 @@ def profile(gdf: GuideDataFrame, analyses: list[str] | None = None) -> Profiling
     profiler = DataProfiler(gdf.df, custom_types=custom_types)
 
     if "dataset" in analyses:
+        # profile_dataset() internally calls profile_columns(), so skip the explicit call
         profiler.profile_dataset()
-
-    if "columns" in analyses:
+    elif "columns" in analyses:
         profiler.profile_columns()
 
-    dataset_stats = getattr(profiler, "dataset_summary", {}) or {}
-    column_stats = getattr(profiler, "column_summaries", {}) or {}
+    dataset_stats = {
+        k: profiler.results[k]
+        for k in ("metadata", "column_types")
+        if k in profiler.results
+    }
+    column_stats = {
+        k: profiler.results[k]
+        for k in ("numeric_profiles", "string_profiles", "temporal_analyses", "phone_profiles")
+        if k in profiler.results
+    }
 
     return ProfilingResult(
         source=gdf,
