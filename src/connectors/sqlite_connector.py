@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -19,10 +21,10 @@ class SQLiteConnector(BaseConnector):
             raise FileNotFoundError(f"SQLite file not found: {self._path}")
 
     def load(self) -> GuideDataFrame:
-        import sqlite3
-        conn = sqlite3.connect(self._path)
-        df = pd.read_sql_query(self._query, conn)
-        conn.close()
+        if not self._path.exists():
+            raise FileNotFoundError(f"SQLite file not found: {self._path}")
+        with contextlib.closing(sqlite3.connect(self._path)) as conn:
+            df = pd.read_sql_query(self._query, conn)
         return GuideDataFrame(
             df=df,
             schema=self._schema,
