@@ -66,7 +66,7 @@ def profile(
     connector.connect()
     gdf = connector.load()
 
-    result = run_profile(gdf)
+    result = run_profile(gdf, output_dir=str(output.parent))
 
     renderer = StaticReportRenderer()
     renderer.render(result, output_path=str(output))

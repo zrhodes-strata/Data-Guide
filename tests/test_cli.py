@@ -37,4 +37,5 @@ def test_validate_command_missing_col():
         "--metric-col", "nonexistent",
         "--value-col", "value",
     ])
-    assert result.exit_code != 0 or "not found" in result.output.lower()
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
